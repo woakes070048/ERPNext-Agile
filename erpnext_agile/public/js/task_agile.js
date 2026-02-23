@@ -1,23 +1,10 @@
 // erpnext_agile/public/js/task_agile.js
 frappe.ui.form.on('Task', {
-    onload: function(frm) {
-        frm._timer_interval = setInterval(() => {
-            console.log('Tick...');
-        }, 2000);
-
-        register_form_cleanup(frm, () => {
-            if (frm._timer_interval) {
-                clearInterval(frm._timer_interval);
-                frm._timer_interval = null;
-                console.log('Timer cleared');
-            }
-        });
-    },
-
     refresh: function(frm) {
         if (frm.doc.is_agile) {
-            parent_issue_query(frm)
-            assignee_users_query(frm)
+            parent_issue_query(frm);
+            assignee_users_query(frm);
+            
             // Add Version Control buttons
             frm.add_custom_button(__('Version History'), function() {
                 show_version_history(frm);
@@ -35,6 +22,7 @@ frappe.ui.form.on('Task', {
                 // Add workflow transition buttons
                 add_workflow_transition_buttons(frm);
             }
+            
             // Add custom buttons for agile features
             add_agile_buttons(frm);
             
@@ -58,6 +46,14 @@ frappe.ui.form.on('Task', {
         }
     },
     
+    // Frappe's native cleanup event - no custom bindings needed
+    on_unload: function(frm) {
+        if (frm._timer_interval) {
+            clearInterval(frm._timer_interval);
+            frm._timer_interval = null;
+        }
+    },
+
     is_agile: function(frm) {
         if (frm.doc.is_agile) {
             show_agile_fields(frm);
@@ -66,7 +62,7 @@ frappe.ui.form.on('Task', {
         }
     },
 
-    issue_status(frm) {
+    issue_status: function(frm) {
         // Filter status dropdown based on workflow
         if (frm.doc.is_agile && frm.doc.project && !frm.is_new()) {
             filter_status_dropdown(frm);
@@ -83,7 +79,7 @@ frappe.ui.form.on('Task', {
         }
     },
     
-    assigned_to_users(frm){
+    assigned_to_users: function(frm) {
         assignee_users_query(frm);
     }
 });
@@ -829,50 +825,41 @@ function stop_timer(frm) {
 }
 
 function show_timer_indicator(frm) {
-    // Get current timer info
     frappe.call({
         method: 'erpnext_agile.api.get_active_timer',
-        args: {
-            task_name: frm.doc.name
-        },
+        args: { task_name: frm.doc.name },
         callback: function(r) {
             if (r.message) {
                 let timer = r.message;
                 
-                // Set the red "Timer Running" indicator
                 frm.page.set_indicator(
                     __('Timer Running: {0}', [timer.elapsed_time]), 
                     'red'
                 );
 
-                // Clear and add Stop Timer button
                 frm.page.clear_inner_toolbar();
                 frm.page.add_inner_button(__('Stop Timer'), function() {
                     stop_timer(frm);
                 });
                 
-                // Update indicator every minute
-                if (!frm._timer_interval) {
-                    frm._timer_interval = setInterval(function() {
-                        if (frm.doc.custom_timer_status === 1) {
-                            show_timer_indicator(frm);
-                        } else {
-                            clearInterval(frm._timer_interval);
-                            frm._timer_interval = null;
-                        }
-                    }, 60000); // Update every minute
+                // Clear existing interval first to prevent duplicates
+                if (frm._timer_interval) {
+                    clearInterval(frm._timer_interval);
                 }
+
+                // Set new interval
+                frm._timer_interval = setInterval(function() {
+                    if (frm.doc.custom_timer_status === 1) {
+                        // Re-run the function to fetch fresh time
+                        show_timer_indicator(frm);
+                    } else {
+                        clearInterval(frm._timer_interval);
+                        frm._timer_interval = null;
+                    }
+                }, 60000); 
             }
         }
     });
-}
-
-function register_form_cleanup(frm, cleanup_fn) {
-    // Browser unload
-    window.addEventListener('beforeunload', cleanup_fn);
-
-    // Frappe navigation change
-    $(document).on('page-change', cleanup_fn);
 }
 
 function sync_to_github(frm) {
@@ -1349,13 +1336,3 @@ function filter_status_dropdown(frm) {
         }
     });
 }
-
-// function get_workflow_scheme(frm) {
-//     // This will be called synchronously, so we need to have it pre-fetched
-//     // or make the API call handle missing workflow scheme
-//     if (frm.doc.project) {
-//         let project = frappe.get_doc('Project', frm.doc.project);
-//         return project ? project.workflow_scheme : null;
-//     }
-//     return null;
-// }

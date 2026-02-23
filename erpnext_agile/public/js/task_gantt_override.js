@@ -12,19 +12,20 @@
         const original_refresh = GanttView.prototype.refresh;
         const original_render_gantt = GanttView.prototype.render_gantt;
 
-        // Function to apply custom colors
+        // Make apply_task_colors a true async function
         GanttView.prototype.apply_task_colors = async function() {
-            if (!this.gantt?.bars) return;
+            if (!this.gantt || !this.gantt.bars) return;
             
             const today = frappe.datetime.str_to_obj(frappe.datetime.get_today());
             const tasks = this.tasks || [];
             const task_ids = tasks.map(t => t.id);
 
-            // Bulk fetch status only if not already fetched
+            // Fetch statuses if we haven't already
             if (!this.__task_status_map || Object.keys(this.__task_status_map).length === 0) {
                 this.__task_status_map = {};
                 
-                if (task_ids.length) {
+                if (task_ids.length > 0) {
+                    // Properly await the API call using Promises
                     await frappe.call({
                         method: "frappe.client.get_list",
                         args: {
@@ -32,8 +33,9 @@
                             fields: ["name", "status"],
                             filters: [["name", "in", task_ids]],
                             limit_page_length: 999
-                        },
-                        callback: (res) => {
+                        }
+                    }).then(res => {
+                        if (res.message) {
                             res.message.forEach(task => {
                                 this.__task_status_map[task.name] = task.status;
                             });
@@ -42,69 +44,72 @@
                 }
             }
 
+            // The data is guaranteed to be here now. Apply the colors.
+            // A tiny timeout is still okay here just to let the Frappe/Frappe-Gantt 
+            // SVG rendering finish its own internal layout loop before we hijack the styles.
             setTimeout(() => {
                 this.gantt.bars.forEach(bar => {
                     const task = bar.task;
                     const end_date = frappe.datetime.str_to_obj(task.end);
-                    const status = this.__task_status_map[task.id] || "Open"; // default
+                    const status = this.__task_status_map[task.id] || "Open";
 
-                    const overdue = status?.toLowerCase() !== "completed" &&
-                        status?.toLowerCase() !== "cancelled" &&
-                        end_date < today;
+                    const overdue = status.toLowerCase() !== "completed" &&
+                                    status.toLowerCase() !== "cancelled" &&
+                                    end_date < today;
 
-                    let bar_color = "#1890ff"; // main bar blue
-                    let progress_color = "#0251bf"; // progress portion
+                    let bar_color, progress_color;
 
-                    if (status?.toLowerCase() === "completed") {
+                    if (status.toLowerCase() === "completed") {
                         bar_color = "#52c41a";
                         progress_color = "#029c07";
-                    } else if (status?.toLowerCase() === "cancelled") {
+                    } else if (status.toLowerCase() === "cancelled") {
                         bar_color = "#8c8c8c";
                         progress_color = "#666967";
                     } else if (overdue) {
                         bar_color = "#ff4d4f";
                         progress_color = "#a8071a";
                     } else {
-                        bar_color = "#f0e513";
-                        progress_color = "#c9a606";
+                        // Open/Pending
+                        bar_color = "#faad14"; // Adjusted the yellow to be a bit softer/modern
+                        progress_color = "#d48806";
                     }
                     
-                    // Apply colors
-                    bar.$bar.style.fill = bar_color;
-                    if (bar.$bar_progress) {
-                        bar.$bar_progress.style.fill = progress_color;
-                    }
+                    // Apply styles directly to the SVG elements
+                    if (bar.$bar) bar.$bar.style.fill = bar_color;
+                    if (bar.$bar_progress) bar.$bar_progress.style.fill = progress_color;
                 });
-            }, 100);
+            }, 50); // Reduced to 50ms, just enough for the browser paint cycle
         };
 
-        // Override refresh to add our color logic
-        GanttView.prototype.refresh = async function () {
+        // Override refresh
+        GanttView.prototype.refresh = function () {
+            // Reset the map so it fetches fresh data on manual refresh
             this.__task_status_map = {};
-            await original_refresh.call(this);
-            await this.apply_task_colors();
+            
+            // Call original (synchronous)
+            original_refresh.call(this);
+            
+            // Fire and forget our color application
+            this.apply_task_colors();
         };
 
-        // Override render_gantt to hook into view changes
+        // Override render_gantt
         GanttView.prototype.render_gantt = function() {
             original_render_gantt.call(this);
             
-            // Store the original on_view_change function
             const original_on_view_change = this.gantt.options.on_view_change;
             
-            // Override on_view_change to apply colors after view change
             this.gantt.options.on_view_change = (mode) => {
-                // Call the original handler first
                 if (original_on_view_change) {
                     original_on_view_change(mode);
                 }
                 
-                // Apply our custom colors after a small delay
-                setTimeout(() => this.apply_task_colors(), 300);
+                // When view changes (Day/Week/Month), Frappe-Gantt destroys and 
+                // recreates the SVG bars. We need to reapply the styles.
+                // We don't need to fetch data again, just reapply the existing map.
+                this.apply_task_colors();
             };
         };
-
-        console.log("GanttView patched with persistent status coloring!");
     };
 
     frappe.after_ajax(patch_gantt_view);

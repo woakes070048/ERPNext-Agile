@@ -7,24 +7,29 @@ frappe.ui.form.on('Project', {
     },
     
     enable_agile: function(frm) {
-        if (frm.doc.enable_agile && !frm.doc.project_key) {
-            // Auto-generate project key suggestion
-            let suggested_key = generate_project_key(frm.doc.project_name);
-            frm.set_value('project_key', suggested_key);
+        if (frm.doc.enable_agile && !frm.doc.project_key && frm.doc.project_name) {
+            frm.set_value('project_key', generate_project_key(frm.doc.project_name));
         }
     },
 
-    project_name: function (frm) {
-		if (frm.doc.__islocal) {
-			// add missing " " arg in split method
-			let parts = frm.doc.project_name.split(" ");
-			let abbr = $.map(parts, function (p) {
-				return p ? p.substr(0, 1) : null;
-			}).join("");
-			frm.set_value("project_key", abbr);
-		}
-	}
+    project_name: function(frm) {
+        if (frm.doc.__islocal && frm.doc.project_name && frm.doc.enable_agile) {
+            frm.set_value('project_key', generate_project_key(frm.doc.project_name));
+        }
+    }
 });
+
+function generate_project_key(project_name) {
+    if (!project_name) return '';
+    let words = project_name.trim().toUpperCase().split(/\s+/); // Better regex split
+    if (words.length >= 3) {
+        return words[0][0] + words[1][0] + words[2][0];
+    } else if (words.length === 2) {
+        return words[0][0] + (words[1].length > 1 ? words[1].substring(0, 2) : words[1][0]);
+    } else {
+        return words[0].substring(0, 3);
+    }
+}
 
 function add_agile_project_buttons(frm) {
     // View Board - Opens a dialog showing the board
@@ -56,30 +61,37 @@ function add_agile_project_buttons(frm) {
 }
 
 function show_agile_board(frm) {
-    let d = new frappe.ui.Dialog({
-        title: __('Agile Board - {0}', [frm.doc.project_name]),
-        size: 'extra-large',
-        fields: [
-            { fieldname: 'board_html', fieldtype: 'HTML' }
-        ]
-    });
+    // 1. Create the dialog only if it doesn't exist yet
+    if (!frm.agile_board_dialog) {
+        frm.agile_board_dialog = new frappe.ui.Dialog({
+            title: __('Agile Board - {0}', [frm.doc.project_name]),
+            size: 'extra-large',
+            fields: [
+                { fieldname: 'board_html', fieldtype: 'HTML' }
+            ]
+        });
+    }
 
+    let d = frm.agile_board_dialog;
+
+    // 2. Update the title (just in case they edited the project name before clicking)
+    d.set_title(__('Agile Board - {0}', [frm.doc.project_name]));
+
+    // 3. Reset the container to the loading state
     d.fields_dict.board_html.$wrapper.html(`
-        <div class="text-center" style="padding: 40px;">
+        <div class="text-center" style="padding: 60px 20px;">
             <div class="spinner-border text-primary" role="status">
                 <span class="sr-only">Loading...</span>
             </div>
-            <p class="text-muted mt-3">Loading board...</p>
+            <p class="text-muted mt-3" style="font-size: 14px;">Fetching board data...</p>
         </div>
     `);
 
+    // 4. Show the dialog
     d.show();
 
-    // Store references for later use
-    d.board_container = d.fields_dict.board_html.$wrapper;
-    d.current_frm = frm;
-
-    load_board(frm, frm.doc.name, null, d.board_container);
+    // 5. Fire off the API call to populate the board
+    load_board(frm, frm.doc.name, null, d.fields_dict.board_html.$wrapper);
 }
 
 function load_board(frm, project, sprint, container) {
@@ -226,32 +238,39 @@ function populate_project_and_sprint_filters(board_data, frm, current_project, c
 }
 
 function render_board_column(status, column) {
+    const border_color = column.status.color || '#dfe1e6';
+    
     let html = `
-        <div class="board-column" data-status="${status}" style="min-width: 300px; background: #f8f9fa; border-radius: 4px; padding: 15px;">
-            <div class="column-header" style="font-weight: bold; margin-bottom: 10px; padding-bottom: 10px; border-bottom: 2px solid ${column.status.color || '#ccc'};">
-                <span>${status}</span>
-                <span class="badge badge-secondary ml-2">${column.issues.length}</span>
-                ${column.total_points > 0 ? `<span class="text-muted ml-2">${column.total_points} pts</span>` : ''}
+        <div class="board-column" data-status="${status}" style="min-width: 320px; max-width: 320px; background: #f4f5f7; border-radius: 8px; padding: 12px; display: flex; flex-direction: column; max-height: 70vh;">
+            <div class="column-header" style="font-weight: 600; font-size: 14px; color: #5e6c84; margin-bottom: 12px; padding-bottom: 8px; border-bottom: 3px solid ${border_color}; display: flex; justify-content: space-between; align-items: center;">
+                <span class="text-uppercase" style="letter-spacing: 0.5px;">${status}</span>
+                <div>
+                    ${column.total_points > 0 ? `<span class="badge badge-light ml-1" style="font-size: 11px;">${column.total_points} pts</span>` : ''}
+                    <span class="badge badge-secondary ml-1" style="border-radius: 12px;">${column.issues.length}</span>
+                </div>
             </div>
-            <div class="column-issues">`;
+            <div class="column-issues" data-status="${status}" style="flex-grow: 1; overflow-y: auto; padding-right: 4px; min-height: 100px;">`;
 
     if (column.issues && column.issues.length > 0) {
         column.issues.forEach(issue => {
             html += `
-                <div class="issue-card" data-issue-name="${issue.name}" data-status="${status}" style="background: white; border: 1px solid #dee2e6; border-radius: 4px; padding: 10px; margin-bottom: 10px; cursor: pointer;">
-                    <div style="display: flex; justify-content: space-between; align-items: start;">
-                        <small class="text-muted">${issue.issue_key}</small>
-                        ${issue.story_points ? `<span class="badge badge-info">${issue.story_points}</span>` : ''}
+                <div class="issue-card" data-issue-name="${issue.name}" style="background: white; border-radius: 6px; padding: 12px; margin-bottom: 10px; cursor: grab; box-shadow: 0 1px 2px rgba(9,30,66,0.15); transition: background-color 0.2s ease;">
+                    <div style="display: flex; justify-content: space-between; align-items: start; margin-bottom: 6px;">
+                        <span style="font-size: 12px; color: #6b778c; font-weight: 500;">${issue.issue_key}</span>
+                        ${issue.story_points ? `<span class="badge badge-info" style="border-radius: 10px; font-size: 11px;">${issue.story_points}</span>` : ''}
                     </div>
-                    <div style="margin: 5px 0; font-weight: 500;">${issue.subject}</div>
-                    <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 8px;">
-                        <span class="badge badge-light">${issue.issue_type || 'Task'}</span>
+                    <div style="font-size: 14px; color: #172b4d; font-weight: 500; line-height: 1.4; margin-bottom: 12px;">
+                        ${issue.subject}
+                    </div>
+                    <div style="display: flex; justify-content: space-between; align-items: center;">
+                        <span class="badge" style="background: #ebecf0; color: #42526e;">${issue.issue_type || 'Task'}</span>
                         ${issue.issue_priority ? `<span class="badge badge-${get_priority_badge_class(issue.issue_priority)}">${issue.issue_priority}</span>` : ''}
                     </div>
                 </div>`;
         });
     } else {
-        html += '<p class="text-muted text-center" style="padding: 20px 0;">No issues</p>';
+        // Empty state block so SortableJS has a drop target
+        html += '<div class="empty-column-dropzone" style="height: 100%; border: 2px dashed #dfe1e6; border-radius: 6px; display: flex; align-items: center; justify-content: center; color: #a5adba; font-size: 12px;">Drop issues here</div>';
     }
 
     html += `</div></div>`;
@@ -270,14 +289,24 @@ function make_columns_sortable(frm, board_data) {
             animation: 150,
             onEnd: function(evt) {
                 let task_name = $(evt.item).data("issue-name");
-                let from_status = $(evt.item).data("status");
-                let to_status = $(evt.to).closest(".board-column").data("status");
+                
+                // The item might drop into an empty column or a populated one. 
+                // We get the status from the .column-issues wrapper we dropped it into.
+                let from_status = $(evt.from).data("status");
+                let to_status = $(evt.to).data("status");
+
+                if (from_status === to_status) return; // Didn't actually change columns
+
+                // Remove the empty state dashed box if it exists
+                $(evt.to).find('.empty-column-dropzone').remove();
 
                 frappe.call({
                     method: "erpnext_agile.api.move_issue",
                     args: { task_name, from_status, to_status },
                     callback: function(r) {
-                        if (!r.exc) frappe.show_alert({ message: __('Issue moved'), indicator: 'green' });
+                        if (!r.exc) {
+                            frappe.show_alert({ message: __('Moved to ' + to_status), indicator: 'green' });
+                        }
                     }
                 });
             }
@@ -286,40 +315,56 @@ function make_columns_sortable(frm, board_data) {
 }
 
 function show_backlog(frm) {
-    let d = new frappe.ui.Dialog({
-        title: __('Product Backlog - {0}', [frm.doc.project_name]),
-        size: 'extra-large',
-        fields: [
-            {
-                fieldname: 'filters_section',
-                fieldtype: 'Section Break',
-                label: 'Filters'
-            },
-            {
-                fieldname: 'type_filter',
-                fieldtype: 'Link',
-                label: 'Issue Type',
-                options: 'Agile Issue Type',
-                onchange: function() {
-                    load_backlog_data(d, frm);
+    // 1. Create the dialog only if it doesn't exist yet
+    if (!frm.agile_backlog_dialog) {
+        frm.agile_backlog_dialog = new frappe.ui.Dialog({
+            title: __('Product Backlog - {0}', [frm.doc.project_name]),
+            size: 'extra-large',
+            fields: [
+                {
+                    fieldname: 'filters_section',
+                    fieldtype: 'Section Break',
+                    label: 'Filters'
+                },
+                {
+                    fieldname: 'type_filter',
+                    fieldtype: 'Link',
+                    label: 'Issue Type',
+                    options: 'Agile Issue Type',
+                    onchange: function() {
+                        // Notice we reference the cached dialog here
+                        load_backlog_data(frm.agile_backlog_dialog, frm);
+                    }
+                },
+                {
+                    fieldname: 'backlog_html',
+                    fieldtype: 'HTML'
                 }
-            },
-            {
-                fieldname: 'backlog_html',
-                fieldtype: 'HTML'
+            ],
+            primary_action_label: __('Create Issue'),
+            primary_action: function() {
+                // Open new issue form
+                frappe.new_doc('Task', {
+                    project: frm.doc.name,
+                    is_agile: 1
+                });
             }
-        ],
-        primary_action_label: __('Create Issue'),
-        primary_action: function() {
-            // Open new issue form
-            frappe.new_doc('Task', {
-                project: frm.doc.name,
-                is_agile: 1
-            });
-        }
-    });
+        });
+    }
+
+    let d = frm.agile_backlog_dialog;
+
+    // 2. Update the title dynamically
+    d.set_title(__('Product Backlog - {0}', [frm.doc.project_name]));
     
+    // Note: We deliberately DO NOT clear the filters here. 
+    // This provides a great UX: if they close the backlog and reopen it, 
+    // their previous filters remain intact!
+
+    // 3. Show the dialog
     d.show();
+    
+    // 4. Load the data (which will show its own spinner inside load_backlog_data)
     load_backlog_data(d, frm);
 }
 
@@ -1131,17 +1176,4 @@ function bulk_sync_github(frm) {
             });
         }
     );
-}
-
-function generate_project_key(project_name) {
-    // Generate project key from project name
-    // Example: "My Awesome Project" -> "MAP"
-    let words = project_name.toUpperCase().split(' ');
-    if (words.length >= 3) {
-        return words[0][0] + words[1][0] + words[2][0];
-    } else if (words.length === 2) {
-        return words[0][0] + words[1].substring(0, 2);
-    } else {
-        return words[0].substring(0, 3);
-    }
 }
