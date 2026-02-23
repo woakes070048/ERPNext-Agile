@@ -9,31 +9,46 @@ class AgileBacklogManager:
     
     def __init__(self, project=None):
         self.project = project
-    
+
     @frappe.whitelist()
     def get_backlog(self, project, filters=None):
         """Get backlog items (issues not in any sprint)"""
         
-        if not filters:
-            filters = {}
+        # 1. Safely parse the incoming JSON string
+        parsed_filters = {}
+        if isinstance(filters, str):
+            try:
+                parsed_filters = json.loads(filters) if filters.strip() else {}
+            except json.JSONDecodeError:
+                parsed_filters = {}
+        elif isinstance(filters, dict):
+            parsed_filters = filters
+            
+        # 2. Build our base conditions and values dictionary
+        conditions = [
+            "project = %(project)s",
+            "is_agile = 1",
+            "(current_sprint IS NULL OR current_sprint = '')",
+            "status != 'Cancelled'"
+        ]
+        values = {"project": project}
         
-        # Build query filters
-        query_filters = {
-            'project': project,
-            'is_agile': 1
-        }
+        # 3. Dynamically append user filters (like Issue Type)
+        if parsed_filters.get('issue_type'):
+            conditions.append("issue_type = %(issue_type)s")
+            values["issue_type"] = parsed_filters.get('issue_type')
+            
+        # Join all conditions together safely
+        where_clause = " AND ".join(conditions)
         
-        # Exclude items in sprints
-        backlog_items = frappe.db.sql("""
+        # 4. Execute the query using the dynamic where_clause and values dict
+        backlog_items = frappe.db.sql(f"""
             SELECT 
                 name, subject, issue_key, issue_type, issue_priority,
                 issue_status, story_points, parent_issue,
                 reporter, creation, modified
             FROM `tabTask`
-            WHERE project = %s 
-                AND is_agile = 1
-                AND (current_sprint IS NULL OR current_sprint = '')
-                AND status != 'Cancelled'
+            WHERE {where_clause}
             ORDER BY 
                 CASE 
                     WHEN issue_priority = 'Critical' THEN 1
@@ -43,7 +58,7 @@ class AgileBacklogManager:
                     ELSE 5
                 END,
                 creation DESC
-        """, (project,), as_dict=True)
+        """, values, as_dict=True)
         
         return backlog_items
     
