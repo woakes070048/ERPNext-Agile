@@ -448,21 +448,27 @@ function parse_time_to_seconds(time_str) {
 }
 
 function update_project_user_display(frm, cdn) {
-    // Update visual indicators for Project User rows
-    let row = frm.get_row(cdn);
-    if (!row) return;
+    // 1. Dig into the grid API to find the exact row object
+    const grid = frm.fields_dict['users'].grid;
+    const grid_row = grid.grid_rows.find(row => row.doc.name === cdn);
     
-    let status = row.custom_designated_task_status || 'Open';
-    let time_util = row.custom_time_utilized || 0;
+    // Bail if the DOM hasn't caught up yet
+    if (!grid_row || !grid_row.wrapper) return;
     
-    // Add styling based on status
-    let row_color = {
-        'Working': '#e7f3ff',
-        'Completed': '#e6f9e6',
-        'Cancelled': '#f0f0f0',
-        'Open': '#fffbf0'
+    const status = grid_row.doc.custom_designated_task_status || 'Open';
+    
+    // 2. Map your Atlassian-style subtle colors
+    const row_colors = {
+        'Working': '#ebecf0',    // Subtle blue-grey
+        'Completed': '#e3fcef',  // Mint green
+        'Cancelled': '#fafbfc',  // Very light grey
+        'Open': '#fffae6'        // Warm yellow
     };
     
-    // This would require accessing the DOM directly, which is complex in Frappe
-    // Better to rely on field formatters in customizations
+    const bg_color = row_colors[status] || 'transparent';
+    
+    // 3. Apply the style directly to the row's outer wrapper
+    $(grid_row.wrapper)
+        .css('background-color', bg_color)
+        .css('transition', 'background-color 0.3s ease'); // Smooth fade just to be fancy
 }
