@@ -38,7 +38,7 @@ function add_time_tracking_buttons(frm) {
     }, __('Time Tracking'));
 
     // Button: Recalculate Times (for data cleanup)
-    if (frappe.session.user === frm.doc.owner || frappe.session.user_roles.includes('Project Manager')) {
+    if (frappe.session.user === frm.doc.owner || frappe.user.has_role('Project Manager')) {
         frm.add_custom_button(__('Recalculate Times'), function() {
             frappe.confirm(
                 __('Recalculate all time metrics for this project? This may take a moment.'),
@@ -76,7 +76,7 @@ function hide_time_tracking_section(frm) {
 
 function load_and_display_time_summary(frm) {
     // Load summary and update the child table display
-    if (!frm.doc.name || frm.doc.is_new()) return;
+    if (!frm.doc.name || frm.is_new()) return;
 
     frappe.call({
         method: 'erpnext_agile.project_time_tracking.get_project_user_time_summary',
@@ -94,14 +94,12 @@ function load_and_display_time_summary(frm) {
 }
 
 function display_time_summary_dashboard(frm, summaries) {
-    // Calculate aggregate stats
-    let total_allocated = 0;
+    // 1. Calculate aggregate stats cleanly
     let total_utilized = 0;
     let team_members_working = 0;
 
     summaries.forEach(summary => {
         if (summary.total_time_spent) {
-            // Parse formatted time back to seconds for calculation
             total_utilized += parse_time_to_seconds(summary.total_time_spent);
         }
         if (summary.status === 'Working') {
@@ -109,38 +107,48 @@ function display_time_summary_dashboard(frm, summaries) {
         }
     });
 
-    // Show as dashboard
-    let dashboard_html = `
-        <div style="padding: 15px; background: #f8f9fa; border-radius: 4px; margin-bottom: 15px;">
-            <h6 style="margin-bottom: 10px;">📊 Team Time Overview</h6>
-            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px;">
-                <div style="background: white; padding: 10px; border-radius: 4px; border-left: 4px solid #007bff;">
-                    <div style="font-size: 0.8em; color: #666; margin-bottom: 5px;">Team Members</div>
-                    <div style="font-size: 1.5em; font-weight: bold;">${summaries.length}</div>
+    // 2. Modern, clean dashboard HTML
+    const dashboard_html = `
+        <div class="time-tracking-dashboard-inner" style="background: #f4f5f7; border-radius: 8px; padding: 16px; margin-bottom: 20px; border: 1px solid #dfe1e6;">
+            <div style="font-size: 13px; font-weight: 600; color: #5e6c84; margin-bottom: 12px; text-transform: uppercase; letter-spacing: 0.5px;">
+                Team Time Overview
+            </div>
+            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px;">
+                <div style="background: white; padding: 12px 16px; border-radius: 6px; border-left: 3px solid #0052cc; box-shadow: 0 1px 1px rgba(9,30,66,0.05);">
+                    <div style="font-size: 0.85em; color: #6b778c; margin-bottom: 4px;">Team Members</div>
+                    <div style="font-size: 1.4em; font-weight: 600; color: #172b4d;">${summaries.length}</div>
                 </div>
-                <div style="background: white; padding: 10px; border-radius: 4px; border-left: 4px solid #28a745;">
-                    <div style="font-size: 0.8em; color: #666; margin-bottom: 5px;">Working Now</div>
-                    <div style="font-size: 1.5em; font-weight: bold;">${team_members_working}</div>
+                <div style="background: white; padding: 12px 16px; border-radius: 6px; border-left: 3px solid #36b37e; box-shadow: 0 1px 1px rgba(9,30,66,0.05);">
+                    <div style="font-size: 0.85em; color: #6b778c; margin-bottom: 4px;">Working Now</div>
+                    <div style="font-size: 1.4em; font-weight: 600; color: #172b4d;">${team_members_working}</div>
                 </div>
-                <div style="background: white; padding: 10px; border-radius: 4px; border-left: 4px solid #6610f2;">
-                    <div style="font-size: 0.8em; color: #666; margin-bottom: 5px;">Total Time Logged</div>
-                    <div style="font-size: 1.5em; font-weight: bold;">${format_seconds_readable(total_utilized)}</div>
+                <div style="background: white; padding: 12px 16px; border-radius: 6px; border-left: 3px solid #6554c0; box-shadow: 0 1px 1px rgba(9,30,66,0.05);">
+                    <div style="font-size: 0.85em; color: #6b778c; margin-bottom: 4px;">Total Time Logged</div>
+                    <div style="font-size: 1.4em; font-weight: 600; color: #172b4d;">${format_seconds_readable(total_utilized)}</div>
                 </div>
             </div>
         </div>
     `;
 
-    // Find or create container in form
-    let container = document.querySelector('[data-fieldname="users"]').closest('.frappe-control');
-    let dashboard = container.querySelector('.time-tracking-dashboard');
-
-    if (!dashboard) {
-        dashboard = document.createElement('div');
-        dashboard.className = 'time-tracking-dashboard';
-        container.insertBefore(dashboard, container.firstChild);
+    // 3. The Frappe-safe way to inject HTML
+    // Safely get the wrapper for the 'users' child table
+    const field_wrapper = frm.fields_dict['users'] ? frm.fields_dict['users'].$wrapper : null;
+    
+    if (!field_wrapper) {
+        console.warn("Could not find the 'users' field wrapper to attach the time dashboard.");
+        return;
     }
 
-    dashboard.innerHTML = dashboard_html;
+    // Find existing dashboard or create a new one to avoid duplicating on every refresh
+    let $dashboard = field_wrapper.find('.time-tracking-dashboard-container');
+    
+    if ($dashboard.length === 0) {
+        // Create the container and prepend it BEFORE the child table
+        $dashboard = $('<div class="time-tracking-dashboard-container"></div>').prependTo(field_wrapper);
+    }
+
+    // Update the inner HTML safely
+    $dashboard.html(dashboard_html);
 }
 
 function show_project_time_summary(frm) {
@@ -326,83 +334,81 @@ function show_user_time_breakdown(user, project_name) {
 }
 
 function render_user_time_breakdown(container, data) {
-    let tasks = data.tasks || [];
+    const tasks = data.tasks || [];
 
-    if (tasks.length === 0) {
-        container.html('<p class="text-muted text-center">No tasks assigned to this user</p>');
+    if (!tasks.length) {
+        container.html('<p class="text-muted text-center py-4">No tasks assigned to this user.</p>');
         return;
     }
 
-    let html = '<div class="user-breakdown">';
+    // 1. Calculate totals cleanly using reduce
+    const totals = tasks.reduce((acc, task) => {
+        acc.time += parse_time_to_seconds(task.time_spent);
+        acc.est += parse_time_to_seconds(task.estimated);
+        acc.rem += parse_time_to_seconds(task.remaining);
+        return acc;
+    }, { time: 0, est: 0, rem: 0 });
 
-    // Summary cards
-    html += `
-        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 10px; margin-bottom: 20px;">
-    `;
-
-    // Calculate totals
-    let total_time = 0;
-    let total_est = 0;
-    let total_remaining = 0;
-
-    tasks.forEach(task => {
-        total_time += parse_time_to_seconds(task.time_spent);
-        total_est += parse_time_to_seconds(task.estimated);
-        total_remaining += parse_time_to_seconds(task.remaining);
-    });
-
-    html += `
-            <div style="background: #e7f3ff; padding: 10px; border-radius: 4px;">
-                <div style="font-size: 0.8em; color: #666;">Time Logged</div>
-                <div style="font-size: 1.3em; font-weight: bold;">${format_seconds_readable(total_time)}</div>
+    // 2. Build the UI using clean template literals
+    const html = `
+        <div class="user-breakdown">
+            <div class="summary-cards" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 16px; margin-bottom: 24px;">
+                <div class="card-metric" style="background: #eef5ff; padding: 16px; border-radius: 6px;">
+                    <div style="font-size: 0.85em; color: #5a6b85; margin-bottom: 4px;">Time Logged</div>
+                    <div style="font-size: 1.4em; font-weight: 600; color: #1a2b4c;">${format_seconds_readable(totals.time)}</div>
+                </div>
+                <div class="card-metric" style="background: #fff8e6; padding: 16px; border-radius: 6px;">
+                    <div style="font-size: 0.85em; color: #7a6331; margin-bottom: 4px;">Estimated</div>
+                    <div style="font-size: 1.4em; font-weight: 600; color: #3d3118;">${format_seconds_readable(totals.est)}</div>
+                </div>
+                <div class="card-metric" style="background: #f4f5f7; padding: 16px; border-radius: 6px;">
+                    <div style="font-size: 0.85em; color: #505f79; margin-bottom: 4px;">Remaining</div>
+                    <div style="font-size: 1.4em; font-weight: 600; color: #172b4d;">${format_seconds_readable(totals.rem)}</div>
+                </div>
             </div>
-            <div style="background: #fff7e6; padding: 10px; border-radius: 4px;">
-                <div style="font-size: 0.8em; color: #666;">Estimated</div>
-                <div style="font-size: 1.3em; font-weight: bold;">${format_seconds_readable(total_est)}</div>
-            </div>
-            <div style="background: #f0f0f0; padding: 10px; border-radius: 4px;">
-                <div style="font-size: 0.8em; color: #666;">Remaining</div>
-                <div style="font-size: 1.3em; font-weight: bold;">${format_seconds_readable(total_remaining)}</div>
+
+            <div class="table-responsive">
+                <table class="table table-borderless table-hover" style="border-collapse: separate; border-spacing: 0 8px;">
+                    <thead style="color: #6b778c; font-size: 0.85em; border-bottom: 1px solid #dfe1e6;">
+                        <tr>
+                            <th class="font-weight-bold pb-2">Issue</th>
+                            <th class="font-weight-bold pb-2">Task</th>
+                            <th class="font-weight-bold pb-2">Status</th>
+                            <th class="font-weight-bold pb-2">Time Logged</th>
+                            <th class="font-weight-bold pb-2">Estimated</th>
+                            <th class="font-weight-bold pb-2">Remaining</th>
+                            <th class="font-weight-bold pb-2">Sprint</th>
+                        </tr>
+                    </thead>
+                    <tbody style="font-size: 0.9em; color: #172b4d;">
+                        ${tasks.map(task => `
+                            <tr style="border-bottom: 1px solid #f4f5f7;">
+                                <td class="align-middle"><strong>${task.issue_key}</strong></td>
+                                <td class="align-middle" style="max-width: 250px;">
+                                    <a href="/app/task/${task.task_name}" 
+                                       style="display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: #344563; text-decoration: none;"
+                                       title="${task.subject}">
+                                        ${task.subject}
+                                    </a>
+                                </td>
+                                <td class="align-middle">
+                                    <span class="badge badge-pill badge-secondary" style="background-color: #dfe1e6; color: #42526e; padding: 4px 8px; border-radius: 12px; font-weight: 600;">
+                                        ${task.status}
+                                    </span>
+                                </td>
+                                <td class="align-middle">${task.time_spent}</td>
+                                <td class="align-middle">${task.estimated}</td>
+                                <td class="align-middle">${task.remaining}</td>
+                                <td class="align-middle" style="color: #6b778c; font-size: 0.85em;">
+                                    ${task.sprint ? task.sprint : '-'}
+                                </td>
+                            </tr>
+                        `).join('')}
+                    </tbody>
+                </table>
             </div>
         </div>
     `;
-
-    // Tasks table
-    html += `
-        <table class="table table-sm">
-            <thead>
-                <tr>
-                    <th>Issue</th>
-                    <th>Task</th>
-                    <th>Status</th>
-                    <th>Time Logged</th>
-                    <th>Estimated</th>
-                    <th>Remaining</th>
-                    <th>Sprint</th>
-                </tr>
-            </thead>
-            <tbody>
-    `;
-
-    tasks.forEach(task => {
-        html += `
-            <tr>
-                <td><strong>${task.issue_key}</strong></td>
-                <td>
-                    <a href="/app/task/${task.task_name}">
-                        ${task.subject.substring(0, 30)}...
-                    </a>
-                </td>
-                <td><span class="badge badge-secondary">${task.status}</span></td>
-                <td>${task.time_spent}</td>
-                <td>${task.estimated}</td>
-                <td>${task.remaining}</td>
-                <td>${task.sprint ? `<small>${task.sprint}</small>` : '-'}</td>
-            </tr>
-        `;
-    });
-
-    html += '</tbody></table></div>';
 
     container.html(html);
 }
