@@ -493,12 +493,22 @@ def get_sprint_burndown(sprint_name):
 @frappe.whitelist()
 def get_backlog(project, filters=None):
     """Get project backlog"""
-    if isinstance(filters, str):
-        filters = json.loads(filters)
     
+    # 1. The Safety Net: Safely parse the incoming string into a dict
+    parsed_filters = {}
+    if isinstance(filters, str):
+        try:
+            parsed_filters = json.loads(filters) if filters.strip() else {}
+        except json.JSONDecodeError:
+            parsed_filters = {}
+    elif isinstance(filters, dict):
+        parsed_filters = filters
+
+    # 2. Hand off the clean dictionary to your manager
     from erpnext_agile.agile_backlog_manager import AgileBacklogManager
     manager = AgileBacklogManager(project)
-    return manager.get_backlog(project, filters)
+    
+    return manager.get_backlog(project, parsed_filters)
 
 
 @frappe.whitelist()

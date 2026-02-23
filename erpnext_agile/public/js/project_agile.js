@@ -158,7 +158,6 @@ function render_board(container, board_data, frm, current_project, current_sprin
 }
 
 function populate_project_and_sprint_filters(board_data, frm, current_project, current_sprint, container) {
-    // Get the filter elements from the container, not global DOM
     const $projectFilter = container.find('#project_filter');
     const $sprintFilter = container.find('#sprint_filter');
 
@@ -167,21 +166,16 @@ function populate_project_and_sprint_filters(board_data, frm, current_project, c
         return;
     }
 
-    // Clear existing options
-    $projectFilter.empty();
-    $sprintFilter.empty();
-
-    // Set current project immediately
-    $projectFilter.append(`<option value="${current_project}">${board_data.project_name || current_project}</option>`);
+    // 1. Eager Load (Prevents UI flickering while API calls happen)
+    $projectFilter.empty().append(`<option value="${current_project}">${board_data.project_name || current_project}</option>`);
     
-    // Set sprint filter immediately
-    if (board_data.sprint && board_data.active_sprint) {
-        $sprintFilter.append(`<option value="${board_data.sprint}">${board_data.active_sprint.sprint_name}</option>`);
-    } else {
-        $sprintFilter.append('<option value="">All Sprints</option>');
+    $sprintFilter.empty().append('<option value="">All Sprints</option>');
+    if (current_sprint) {
+        let eager_sprint_name = board_data.active_sprint ? board_data.active_sprint.sprint_name : current_sprint;
+        $sprintFilter.append(`<option value="${current_sprint}" selected>${eager_sprint_name}</option>`);
     }
 
-    // Load all projects
+    // 2. Fetch and populate ALL Projects
     frappe.call({
         method: "frappe.client.get_list",
         args: { 
@@ -191,23 +185,25 @@ function populate_project_and_sprint_filters(board_data, frm, current_project, c
         },
         callback: function(r) {
             if (r.message) {
+                $projectFilter.empty(); // Clear eager load
                 r.message.forEach(proj => {
-                    if (proj.name !== current_project) {
-                        $projectFilter.append(`<option value="${proj.name}">${proj.project_name}</option>`);
-                    }
+                    $projectFilter.append(`<option value="${proj.name}">${proj.project_name || proj.name}</option>`);
                 });
+                
+                // Set the active value
+                $projectFilter.val(current_project);
 
                 // Set up project filter change event
                 $projectFilter.off('change').on('change', function() {
                     let selected_project = $(this).val();
-                    let selected_sprint = $sprintFilter.val() || null;
-                    load_board(frm, selected_project, selected_sprint, container);
+                    // CRITICAL FIX: Force sprint to null when switching projects!
+                    load_board(frm, selected_project, null, container);
                 });
             }
         }
     });
 
-    // Load all sprints for the current project
+    // 3. Fetch and populate ALL Sprints for this specific project
     if (current_project) {
         frappe.call({
             method: "frappe.client.get_list",
@@ -219,11 +215,17 @@ function populate_project_and_sprint_filters(board_data, frm, current_project, c
             },
             callback: function(r) {
                 if (r.message) {
+                    $sprintFilter.empty(); // Clear eager load
+                    $sprintFilter.append('<option value="">All Sprints</option>'); // Always available
+                    
                     r.message.forEach(s => {
-                        if (!board_data.sprint || s.name !== board_data.sprint) {
-                            $sprintFilter.append(`<option value="${s.name}">${s.sprint_name}</option>`);
-                        }
+                        $sprintFilter.append(`<option value="${s.name}">${s.sprint_name}</option>`);
                     });
+
+                    // Safely set the active sprint
+                    if (current_sprint) {
+                        $sprintFilter.val(current_sprint);
+                    }
 
                     // Set up sprint filter change event
                     $sprintFilter.off('change').on('change', function() {
@@ -332,8 +334,10 @@ function show_backlog(frm) {
                     label: 'Issue Type',
                     options: 'Agile Issue Type',
                     onchange: function() {
-                        // Notice we reference the cached dialog here
-                        load_backlog_data(frm.agile_backlog_dialog, frm);
+                        // Let Frappe finish updating its internal state first
+                        setTimeout(() => {
+                            load_backlog_data(frm.agile_backlog_dialog, frm);
+                        }, 50);
                     }
                 },
                 {
@@ -377,15 +381,20 @@ function load_backlog_data(dialog, frm) {
     `);
     
     let filters = {};
-    if (dialog.get_value('type_filter')) {
-        filters.issue_type = dialog.get_value('type_filter');
+    let selected_type = dialog.get_value('type_filter');
+    
+    if (selected_type) {
+        // Double-check that your database field is actually 'issue_type' 
+        // and not 'custom_issue_type'
+        filters.issue_type = selected_type; 
     }
     
     frappe.call({
         method: 'erpnext_agile.api.get_backlog',
         args: {
             project: frm.doc.name,
-            filters: filters
+            // Force it into a clean JSON string so Python receives it correctly
+            filters: Object.keys(filters).length > 0 ? JSON.stringify(filters) : null
         },
         callback: function(r) {
             if (r.message) {
